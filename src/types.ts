@@ -4843,6 +4843,7 @@ export enum ZodFirstPartyTypeKind {
   ZodPromise = "ZodPromise",
   ZodBranded = "ZodBranded",
   ZodPipeline = "ZodPipeline",
+  ZodClass = "ZodClass",
 }
 export type ZodFirstPartySchemaTypes =
   | ZodString
@@ -4892,6 +4893,58 @@ const instanceOfType = <T extends typeof Class>(
   }
 ) => custom<InstanceType<T>>((data) => data instanceof cls, params);
 
+type ClassType = new (...args: any) => any;
+export interface ZodClassDef<T extends ClassType> extends ZodTypeDef {
+  value: T;
+  construct: boolean;
+  typeName: ZodFirstPartyTypeKind.ZodClass;
+}
+export class ZodClass<T extends ClassType> extends ZodType<
+  InstanceType<T>,
+  ZodClassDef<T>
+> {
+  _parse(input: ParseInput): ParseReturnType<any> {
+    const cls = this._def.value;
+    if (typeof input.data !== "object" || input.data instanceof Array) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.object,
+        received: ctx.parsedType,
+      });
+      return INVALID;
+    }
+    if (!(input.data instanceof cls)) {
+      if (this._def.construct) {
+        try {
+          return { status: "valid", value: new cls(input.data) };
+        } catch (err) {}
+      }
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.object,
+        received: ctx.parsedType,
+      });
+      return INVALID;
+    }
+
+    return { status: "valid", value: input.data };
+  }
+
+  static create = <T extends ClassType>(
+    value: T,
+    params?: RawCreateParams & { construct?: boolean }
+  ): ZodClass<T> => {
+    return new ZodClass<T>({
+      value: value,
+      construct: params?.construct || false,
+      typeName: ZodFirstPartyTypeKind.ZodClass,
+      ...processCreateParams(params),
+    });
+  };
+}
+
 const stringType = ZodString.create;
 const numberType = ZodNumber.create;
 const nanType = ZodNaN.create;
@@ -4929,6 +4982,14 @@ const pipelineType = ZodPipeline.create;
 const ostring = () => stringType().optional();
 const onumber = () => numberType().optional();
 const oboolean = () => booleanType().optional();
+
+export const construct = {
+  instanceof: ((cls, arg) =>
+    ZodClass.create(cls, {
+      ...arg,
+      construct: true,
+    })) as (typeof ZodClass)["create"],
+};
 
 export const coerce = {
   string: ((arg) =>
